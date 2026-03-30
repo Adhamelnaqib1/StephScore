@@ -495,7 +495,8 @@ if mode == "Graph":
         df_bar = df_bar.sort_values(bar_stat, ascending=sort_asc)
         df_bar = df_bar.head(top_n)
 
-        lg_val = df_plot_base[bar_stat].mean()
+        # REVERSE the order so the best/worst appears at the top of the chart
+        df_bar = df_bar.iloc[::-1].reset_index(drop=True)
 
         lg_val = df_plot_base[bar_stat].mean()
 
