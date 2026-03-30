@@ -476,7 +476,7 @@ if mode == "Graph":
             height=640, hovermode="closest")
         st.plotly_chart(fig, use_container_width=True)
 
-    # ── BAR ───────────────────────────────────────────────────────────────────
+        # ── BAR ───────────────────────────────────────────────────────────────────
     else:
         df_bar = df_plot_base.dropna(subset=[bar_stat]).copy()
         if df_bar.empty:
@@ -485,14 +485,17 @@ if mode == "Graph":
 
         if not is_career and scope == "All Seasons":
             df_bar["DISPLAY"] = df_bar.apply(
-                lambda r: f"{r['PLAYER_NAME']}  ({r.get('SEASON','')[2:]}", axis=1)
+                lambda r: f"{r['PLAYER_NAME']}  ({r.get('SEASON', '')[2:]})", axis=1)
         elif is_career:
             df_bar["DISPLAY"] = df_bar["PLAYER_NAME"]
         else:
             df_bar["DISPLAY"] = df_bar["PLAYER_NAME"]
 
+        # Sort and get top N (highest values for descending, lowest for ascending)
         df_bar = df_bar.sort_values(bar_stat, ascending=sort_asc)
-        df_bar = df_bar.tail(top_n) if not sort_asc else df_bar.head(top_n)
+        df_bar = df_bar.head(top_n)
+
+        lg_val = df_plot_base[bar_stat].mean()
 
         lg_val = df_plot_base[bar_stat].mean()
 
