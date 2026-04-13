@@ -48,7 +48,7 @@ nba_http.STATS_HEADERS = {
 # =============================================================================
 # CONFIG
 # =============================================================================
-SEASONS = [f"{y}-{str(y+1)[-2:]}" for y in range(2007, 2025)]
+SEASONS = [f"{y}-{str(y+1)[-2:]}" for y in range(2007, 2026)]
 MIN_MIN_PCT       = 0.80    # top 20% of minutes → qualifying per season
 MIN_SHARED_MIN    = 150     # shared lineup-minutes to be a "core teammate" (per-season pass)
 MIN_SHARED_CAREER = 50      # looser threshold for the career uncapped pass
