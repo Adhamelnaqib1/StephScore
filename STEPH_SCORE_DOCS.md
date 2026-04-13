@@ -603,8 +603,6 @@ both ON and OFF TS%, but should largely cancel out in the delta.
 
 ---
 
-<<<<<<< HEAD
 *Last updated: 2026 · Built with nba_api, pandas, scipy, matplotlib, plotly, streamlit*
-=======
-*Last updated: 2025 · Built with nba_api, pandas, scipy, matplotlib, plotly, streamlit*
->>>>>>> origin/main
+
+
