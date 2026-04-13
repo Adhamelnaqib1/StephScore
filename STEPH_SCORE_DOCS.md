@@ -561,7 +561,7 @@ Compare modes show all columns from the CSV (see §10 for full column reference)
 
 **"Who led the league in TOE in 2024-25?"**
 → Season: 2024-25 · Chart: Bar · Stat: TOE · no highlights
->>>>>>> origin/main
+
 
 ---
 
