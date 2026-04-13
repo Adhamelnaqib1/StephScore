@@ -490,7 +490,7 @@ highlighted gold accordingly.
 No chart is generated in this mode.
 
 ---
-=======
+
 Place `steph_all_seasons.csv` in the same directory.
 
 ### Features
@@ -505,7 +505,7 @@ Place `steph_all_seasons.csv` in the same directory.
 | **League Average Lines** | Toggle horizontal/vertical league average reference |
 | **Size by Minutes** | Dot size proportional to minutes played (scatter only) |
 | **Top N** (bar) | How many players to show |
->>>>>>> origin/main
+
 
 ### Available stats in the explorer
 
@@ -543,7 +543,7 @@ Compare modes show all columns from the CSV (see §10 for full column reference)
 
 **"What were all of Draymond Green's stats in 2020-21?"**
 → Mode: Player Stats · Player: Draymond Green · Season: 2020-21
-=======
+
 | STEPH % | `STEPH_PCT` | Relative teammate TS% improvement (primary) |
 | STEPH Adjusted % | `STEPH_ADJ` | Quality-adjusted gravity |
 | Own True Shooting % | `OWN_TS` | Player's own TS% |
