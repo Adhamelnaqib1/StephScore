@@ -411,7 +411,7 @@ pip install streamlit plotly pandas
 streamlit run steph_explorer.py
 ```
 
-<<<<<<< HEAD
+
 Place `steph_all_seasons.csv` in the same directory as `steph_explorer.py`.
 
 ### Modes
@@ -512,7 +512,7 @@ Place `steph_all_seasons.csv` in the same directory.
 | Stat | Column | Description |
 |---|---|---|
 | STEPH Absolute | `STEPH_ABS` | Teammate TS% pts gained (absolute) |
-<<<<<<< HEAD
+
 | STEPH % | `STEPH_PCT` | Relative teammate TS% improvement — primary metric |
 | STEPH Adjusted % | `STEPH_ADJ` | Quality-adjusted gravity (× TQF) |
 | Own True Shooting % | `OWN_TS` | Player's own TS% |
