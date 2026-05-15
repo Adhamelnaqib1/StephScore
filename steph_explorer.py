@@ -16,6 +16,7 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 import streamlit as st
+import io
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -57,7 +58,7 @@ st.markdown("""
 STATS = {
     "STEPH_ABS"  : "STEPH Absolute  (teammate TS% pts gained)",
     "STEPH_PCT"  : "STEPH %  (relative teammate TS% improvement)",
-    "STEPH_ADJ"  : "STEPH Adjusted %  (quality-adjusted gravity)",
+    "rSTEPH"     : "rSTEPH  (STEPH relative to league avg TS%)",
     "OWN_TS"     : "Own True Shooting %",
     "PPG"        : "Points Per Game",
     "APG"        : "Assists Per Game",
@@ -67,7 +68,7 @@ STATS = {
 STAT_SHORT = {
     "STEPH_ABS" : "STEPH Abs",
     "STEPH_PCT" : "STEPH %",
-    "STEPH_ADJ" : "STEPH Adj %",
+    "rSTEPH"    : "rSTEPH",
     "OWN_TS"    : "TS%",
     "PPG"       : "PPG",
     "APG"       : "APG",
@@ -76,7 +77,7 @@ STAT_SHORT = {
 
 # All stats shown in Player Stats / Compare modes
 ALL_STAT_COLS = [
-    "SEASON","TEAM","STEPH_PCT","STEPH_ADJ","STEPH_ABS",
+    "SEASON","TEAM","STEPH_PCT","rSTEPH","STEPH_ABS",
     "OWN_TS","TOE","PPG","APG","TQF",
     "TM_TS_ON","TM_TS_OFF","LEAGUE_AVG_TS",
     "P_SHOT_WEIGHT","TM_SHOT_WEIGHT",
@@ -86,7 +87,7 @@ ALL_STAT_COLS = [
 
 STAT_DESC = {
     "STEPH_PCT"       : "Relative teammate TS% improvement (%)",
-    "STEPH_ADJ"       : "Quality-adjusted teammate improvement",
+    "rSTEPH"          : "STEPH relative to league average TS%",
     "STEPH_ABS"       : "Absolute teammate TS% pts gained",
     "OWN_TS"          : "Player's own True Shooting %",
     "TOE"             : "Total Offensive Efficiency (own + gravity)",
@@ -153,7 +154,7 @@ PLAYER_PALETTE = [
 # =============================================================================
 
 REQUIRED = ["PLAYER_NAME","PLAYER_ID","SEASON","TEAM",
-            "STEPH_ABS","STEPH_PCT","STEPH_ADJ","OWN_TS","TOE","GP","MIN"]
+            "STEPH_ABS","STEPH_PCT","rSTEPH","OWN_TS","TOE","GP","MIN"]
 
 @st.cache_data
 def load(path="steph_all_seasons.csv"):
@@ -221,9 +222,9 @@ with st.sidebar:
 
     mode = st.radio(
         "Mode",
-        ["Graph", "Player Stats", "Compare"],
+        ["Graph", "Custom Graph", "List", "Player Stats", "Compare"],
         index=0,
-        help="Graph: charts across stats. Player Stats: lookup tables. Compare: side-by-side.",
+        help="Graph: charts across stats. Custom Graph: chart with only selected players. List: sortable continuous list of all players. Player Stats: lookup tables. Compare: side-by-side.",
     )
 
 # =============================================================================
@@ -567,6 +568,442 @@ if mode == "Graph":
             xaxis_title=STATS[bar_stat],
             height=max(440, top_n*34+130), bargap=0.22)
         st.plotly_chart(fig2, use_container_width=True)
+
+
+# =============================================================================
+# MODE: CUSTOM GRAPH (only selected players shown)
+# =============================================================================
+
+elif mode == "Custom Graph":
+
+    with st.sidebar:
+        st.markdown("---")
+
+        # Season scope
+        SCOPE_OPTIONS = ["Career Average", "All Seasons"] + sorted(
+            [s for s in VALID_SEASONS if s in df_full["SEASON"].unique()],
+            reverse=True,
+        )
+        scope = st.selectbox(
+            "Season Scope",
+            SCOPE_OPTIONS,
+            help=(
+                "'Career Average' → one dot per player, averaged across all their seasons.\n"
+                "'All Seasons' → every player-season as its own dot.\n"
+                "Or pick a specific season."
+            ),
+        )
+
+        # Determine working dataframe
+        if scope == "Career Average":
+            df_plot_base = career_df.copy()
+            is_career = True
+        elif scope == "All Seasons":
+            df_plot_base = df_full.copy()
+            is_career = False
+        else:
+            df_plot_base = df_full[df_full["SEASON"] == scope].copy()
+            is_career = False
+
+        # Player selection - REQUIRED for Custom Graph mode
+        player_options = sorted(df_plot_base["PLAYER_NAME"].dropna().unique())
+        selected_players = st.multiselect(
+            "Select Players to Display",
+            player_options,
+            default=[],
+            placeholder="Type a name…",
+            help="Only selected players will appear in the chart.",
+        )
+
+        st.markdown("---")
+
+        chart_type = st.radio("Chart Type", ["Scatter", "Bar"], horizontal=True)
+
+        st.markdown("---")
+
+        stat_keys = list(STATS.keys())
+        avail = [k for k in stat_keys if k in df_plot_base.columns]
+
+        if chart_type == "Scatter":
+            x_stat = st.selectbox("X-Axis", avail,
+                                  index=avail.index("OWN_TS") if "OWN_TS" in avail else 0,
+                                  format_func=lambda k: STATS[k])
+            y_stat = st.selectbox("Y-Axis", avail,
+                                  index=avail.index("STEPH_PCT") if "STEPH_PCT" in avail else 1,
+                                  format_func=lambda k: STATS[k])
+            show_lg   = st.toggle("Show league average lines", value=True)
+            size_mins = st.toggle("Size dots by minutes", value=True)
+        else:
+            bar_stat  = st.selectbox("Stat", avail,
+                                     index=avail.index("TOE") if "TOE" in avail else 0,
+                                     format_func=lambda k: STATS[k])
+            top_n     = st.slider("Top N", 5, 30, 20)
+            sort_asc  = st.radio("Sort", ["Descending", "Ascending"], horizontal=True) == "Ascending"
+            show_lg   = st.toggle("Show league average line", value=True)
+
+        # Download button
+        st.markdown("---")
+        download_btn = st.button("Download Chart as PNG", help="Download with watermark")
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    scope_label = scope if scope not in ("Career Average","All Seasons") else scope
+    st.markdown(f"## Custom Graph  ·  {scope_label}")
+
+    if not selected_players:
+        st.info("Select one or more players in the sidebar to display.")
+        st.stop()
+
+    # ── Summary cards ─────────────────────────────────────────────────────────
+    df_filtered = df_plot_base[df_plot_base["PLAYER_NAME"].isin(selected_players)].copy()
+    n_players = df_filtered["PLAYER_NAME"].nunique()
+    n_rows    = len(df_filtered)
+    avg_steph = df_filtered["STEPH_PCT"].mean() if "STEPH_PCT" in df_filtered.columns else np.nan
+    avg_toe   = df_filtered["TOE"].mean() if "TOE" in df_filtered.columns else np.nan
+
+    c1,c2,c3,c4 = st.columns(4)
+    for col, lbl, val in zip(
+        [c1,c2,c3,c4],
+        ["Players","Data points","Avg STEPH %","Avg TOE"],
+        [f"{n_players:,}", f"{n_rows:,}",
+         f"{avg_steph:.2f}%" if not np.isnan(avg_steph) else "—",
+         f"{avg_toe:.2f}"   if not np.isnan(avg_toe)   else "—"],
+    ):
+        col.markdown(
+            f"<div class='card'><div class='card-label'>{lbl}</div>"
+            f"<div class='card-value'>{val}</div></div>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("---")
+
+    # ── SCATTER ───────────────────────────────────────────────────────────────
+    if chart_type == "Scatter":
+        df_sc = df_filtered.dropna(subset=[x_stat, y_stat]).copy()
+        if df_sc.empty:
+            st.warning("No data for the chosen axes and scope.")
+            st.stop()
+
+        lg_x = df_sc[x_stat].mean()
+        lg_y = df_sc[y_stat].mean()
+        max_min = df_sc["MIN"].max() if ("MIN" in df_sc.columns and size_mins) else 1
+
+        def sz(sub, scale=20, base=5):
+            if size_mins and "MIN" in sub.columns:
+                return ((sub["MIN"].fillna(0) / max_min * scale) + base).values
+            return np.full(len(sub), 8)
+
+        fig = go.Figure()
+
+        # All selected players are highlighted
+        for i, pname in enumerate(selected_players):
+            sub = df_sc[df_sc["PLAYER_NAME"] == pname]
+            if sub.empty:
+                continue
+
+            col = PLAYER_PALETTE[i % len(PLAYER_PALETTE)]
+
+            if is_career:
+                ann = sub.apply(
+                    lambda r: f"<b>{r['PLAYER_NAME']}</b><br>{int(r['SEASONS'])} seasons", axis=1
+                ).tolist()
+                hi_custom = np.stack([
+                    sub["PLAYER_NAME"],
+                    sub["TEAMS"].fillna(""),
+                    sub["SEASONS"].astype(str),
+                    sub[x_stat].round(2).astype(str),
+                    sub[y_stat].round(2).astype(str),
+                ], axis=-1)
+                hi_hover = (
+                    "<b>%{customdata[0]}</b><br>"
+                    "Teams: %{customdata[1]}<br>"
+                    "Seasons: %{customdata[2]}<br>"
+                    f"{STAT_SHORT[x_stat]}: %{{customdata[3]}}<br>"
+                    f"{STAT_SHORT[y_stat]}: %{{customdata[4]}}"
+                    "<extra></extra>"
+                )
+            else:
+                ann = sub.apply(
+                    lambda r: (
+                        f"<b>{r['PLAYER_NAME']}</b><br>{r['TEAM']}"
+                        + (f" ({r['SEASON'][2:]})" if scope == "All Seasons" else "")
+                    ),
+                    axis=1,
+                ).tolist()
+                season_col2 = sub["SEASON"] if "SEASON" in sub.columns else pd.Series([""] * len(sub))
+                hi_custom = np.stack([
+                    sub["PLAYER_NAME"],
+                    sub["TEAM"].fillna(""),
+                    season_col2,
+                    sub[x_stat].round(2).astype(str),
+                    sub[y_stat].round(2).astype(str),
+                ], axis=-1)
+                hi_hover = (
+                    "<b>%{customdata[0]}</b>  %{customdata[1]}<br>"
+                    "Season: %{customdata[2]}<br>"
+                    f"{STAT_SHORT[x_stat]}: %{{customdata[3]}}<br>"
+                    f"{STAT_SHORT[y_stat]}: %{{customdata[4]}}"
+                    "<extra></extra>"
+                )
+
+            fig.add_trace(go.Scatter(
+                x=sub[x_stat], y=sub[y_stat],
+                mode="markers+text", name=pname,
+                marker=dict(color=col, size=sz(sub, scale=28, base=12),
+                            opacity=1.0, line=dict(width=1.5, color="#E6EDF3")),
+                text=ann, textposition="top right",
+                textfont=dict(color=col, size=11),
+                customdata=hi_custom, hovertemplate=hi_hover,
+            ))
+
+        if show_lg:
+            fig.add_hline(y=lg_y, line_dash="dash", line_color=MUTED, line_width=1.2, opacity=0.7,
+                          annotation_text=f"Lg avg {STAT_SHORT[y_stat]} = {lg_y:.2f}",
+                          annotation_font=dict(color=MUTED, size=10),
+                          annotation_position="bottom right")
+            fig.add_vline(x=lg_x, line_dash="dot", line_color=MUTED, line_width=1.0, opacity=0.7,
+                          annotation_text=f"Lg avg {STAT_SHORT[x_stat]} = {lg_x:.2f}",
+                          annotation_font=dict(color=MUTED, size=10),
+                          annotation_position="top left")
+
+        xr = df_sc[x_stat].max() - df_sc[x_stat].min()
+        yr = df_sc[y_stat].max() - df_sc[y_stat].min()
+        fig.update_xaxes(range=[df_sc[x_stat].min()-xr*.05, df_sc[x_stat].max()+xr*.18])
+        fig.update_yaxes(range=[df_sc[y_stat].min()-yr*.08, df_sc[y_stat].max()+yr*.30])
+
+        hl = f"Displayed: {', '.join(selected_players)}"
+        fig.update_layout(**PLOTLY_THEME,
+            title=dict(text=(f"<b>{STATS[x_stat]}</b>  ×  <b>{STATS[y_stat]}</b><br>"
+                             f"<span style='font-size:12px;color:{MUTED};'>"
+                             f"{scope_label}  ·  {hl}</span>"),
+                       font=dict(size=15), x=0, xanchor="left"),
+            xaxis_title=STATS[x_stat], yaxis_title=STATS[y_stat],
+            height=640, hovermode="closest")
+        st.plotly_chart(fig, use_container_width=True, key="custom_scatter")
+
+        # Download functionality
+        if download_btn:
+            # Add watermark annotation
+            fig.add_annotation(
+                text="stephscore.streamlit.app",
+                xref="paper", yref="paper",
+                x=0.5, y=0.02,
+                showarrow=False,
+                font=dict(size=14, color="rgba(240,180,41,0.5)"),
+                xanchor="center", yanchor="bottom"
+            )
+            img_bytes = fig.to_image(format="png", width=1200, height=700, scale=2)
+            st.download_button(
+                label="⬇️ Download PNG",
+                data=img_bytes,
+                file_name=f"custom_graph_{scope.replace(' ', '_')}.png",
+                mime="image/png",
+            )
+
+    # ── BAR ───────────────────────────────────────────────────────────────────
+    else:
+        df_bar = df_filtered.dropna(subset=[bar_stat]).copy()
+        if df_bar.empty:
+            st.warning(f"No data for {STATS[bar_stat]}.")
+            st.stop()
+
+        if not is_career and scope == "All Seasons":
+            df_bar["DISPLAY"] = df_bar.apply(
+                lambda r: f"{r['PLAYER_NAME']}  ({r.get('SEASON', '')[2:]})", axis=1)
+        elif is_career:
+            df_bar["DISPLAY"] = df_bar["PLAYER_NAME"]
+        else:
+            df_bar["DISPLAY"] = df_bar["PLAYER_NAME"]
+
+        # Sort and get top N (highest values for descending, lowest for ascending)
+        df_bar = df_bar.sort_values(bar_stat, ascending=sort_asc)
+        df_bar = df_bar.head(top_n)
+
+        # REVERSE the order so the best/worst appears at the top of the chart
+        df_bar = df_bar.iloc[::-1].reset_index(drop=True)
+
+        lg_val = df_plot_base[bar_stat].mean()
+
+        colors = [PLAYER_PALETTE[i % len(PLAYER_PALETTE)] for i in range(len(df_bar))]
+
+        if is_career:
+            bar_text = df_bar.apply(
+                lambda r: f"  {int(r['SEASONS'])}s  ·  {r[bar_stat]:+.2f}", axis=1).tolist()
+            hover_tmpl = (
+                "<b>%{customdata[0]}</b><br>"
+                "Seasons: %{customdata[1]}<br>"
+                f"{STAT_SHORT[bar_stat]}: %{{customdata[2]}}"
+                "<extra></extra>"
+            )
+            cdata = np.stack([
+                df_bar["PLAYER_NAME"],
+                df_bar["SEASONS"].astype(str),
+                df_bar[bar_stat].round(3).astype(str),
+            ], axis=-1)
+        else:
+            team_col = df_bar["TEAM"].fillna("") if "TEAM" in df_bar.columns else pd.Series([""] * len(df_bar))
+            bar_text = df_bar.apply(
+                lambda r: f"  {r.get('TEAM','')}  ·  {r[bar_stat]:+.2f}", axis=1).tolist()
+            season_col3 = df_bar["SEASON"] if "SEASON" in df_bar.columns else pd.Series([""] * len(df_bar))
+            hover_tmpl = (
+                "<b>%{customdata[0]}</b>  %{customdata[1]}<br>"
+                "Season: %{customdata[2]}<br>"
+                f"{STAT_SHORT[bar_stat]}: %{{customdata[3]}}"
+                "<extra></extra>"
+            )
+            cdata = np.stack([
+                df_bar["PLAYER_NAME"],
+                team_col,
+                season_col3,
+                df_bar[bar_stat].round(3).astype(str),
+            ], axis=-1)
+
+        fig2 = go.Figure()
+        fig2.add_trace(go.Bar(
+            x=df_bar[bar_stat], y=df_bar["DISPLAY"],
+            orientation="h", marker_color=colors, marker_line=dict(width=0),
+            text=bar_text, textposition="outside",
+            textfont=dict(color="#E6EDF3", size=10),
+            customdata=cdata, hovertemplate=hover_tmpl,
+        ))
+        if show_lg:
+            fig2.add_vline(x=lg_val, line_dash="dash", line_color=MUTED, line_width=1.5, opacity=0.8,
+                           annotation_text=f"Lg avg = {lg_val:.2f}",
+                           annotation_font=dict(color=MUTED, size=10), annotation_position="top")
+
+        xmx = df_bar[bar_stat].max()
+        xmn = min(df_bar[bar_stat].min(), 0)
+        xrng = xmx - xmn
+        fig2.update_xaxes(range=[xmn - xrng*.04, xmx + xrng*.28])
+        fig2.update_yaxes(tickfont=dict(size=10, color="#E6EDF3"))
+
+        hl = f"Displayed: {', '.join(selected_players)}"
+        fig2.update_layout(**PLOTLY_THEME,
+            title=dict(text=(f"<b>{STATS[bar_stat]}</b>  ·  Top {top_n}<br>"
+                             f"<span style='font-size:12px;color:{MUTED};'>"
+                             f"{scope_label}  ·  {hl}</span>"),
+                       font=dict(size=15), x=0, xanchor="left"),
+            xaxis_title=STATS[bar_stat],
+            height=max(440, top_n*34+130), bargap=0.22)
+        st.plotly_chart(fig2, use_container_width=True, key="custom_bar")
+
+        # Download functionality
+        if download_btn:
+            # Add watermark annotation
+            fig2.add_annotation(
+                text="stephscore.streamlit.app",
+                xref="paper", yref="paper",
+                x=0.5, y=0.02,
+                showarrow=False,
+                font=dict(size=14, color="rgba(240,180,41,0.5)"),
+                xanchor="center", yanchor="bottom"
+            )
+            img_bytes = fig2.to_image(format="png", width=1200, height=700, scale=2)
+            st.download_button(
+                label="⬇️ Download PNG",
+                data=img_bytes,
+                file_name=f"custom_bar_{scope.replace(' ', '_')}.png",
+                mime="image/png",
+            )
+
+
+# =============================================================================
+# MODE: LIST (continuous sortable list of all players)
+# =============================================================================
+
+elif mode == "List":
+
+    with st.sidebar:
+        st.markdown("---")
+
+        # Season scope
+        SCOPE_OPTIONS = ["Career Average", "All Seasons"] + sorted(
+            [s for s in VALID_SEASONS if s in df_full["SEASON"].unique()],
+            reverse=True,
+        )
+        scope = st.selectbox(
+            "Season Scope",
+            SCOPE_OPTIONS,
+            help=(
+                "'Career Average' → one row per player, averaged across all their seasons.\n"
+                "'All Seasons' → every player-season as its own row.\n"
+                "Or pick a specific season."
+            ),
+        )
+
+        # Determine working dataframe
+        if scope == "Career Average":
+            df_list_base = career_df.copy()
+            is_career = True
+        elif scope == "All Seasons":
+            df_list_base = df_full.copy()
+            is_career = False
+        else:
+            df_list_base = df_full[df_full["SEASON"] == scope].copy()
+            is_career = False
+
+        # Stat to sort by
+        stat_keys = list(STATS.keys())
+        avail_stats = [k for k in stat_keys if k in df_list_base.columns]
+        
+        # Add additional stats for sorting
+        extra_sort_cols = ["PPG", "APG", "TOE", "OWN_TS", "MIN", "GP"]
+        for col in extra_sort_cols:
+            if col in df_list_base.columns and col not in avail_stats:
+                avail_stats.append(col)
+
+        sort_stat = st.selectbox(
+            "Sort By",
+            avail_stats,
+            index=avail_stats.index("STEPH_PCT") if "STEPH_PCT" in avail_stats else 0,
+            format_func=lambda k: STATS.get(k, STAT_DESC.get(k, k)),
+        )
+
+        sort_order = st.radio("Order", ["Descending", "Ascending"], horizontal=True)
+
+        # Search/filter
+        search_term = st.text_input("Search Player", placeholder="Type player name...")
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    scope_label = scope if scope not in ("Career Average","All Seasons") else scope
+    st.markdown(f"## Player List  ·  {scope_label}")
+
+    # Filter and sort
+    df_display = df_list_base.copy()
+    
+    if search_term:
+        df_display = df_display[df_display["PLAYER_NAME"].str.contains(search_term, case=False, na=False)]
+
+    ascending = sort_order == "Ascending"
+    df_display = df_display.sort_values(sort_stat, ascending=ascending)
+
+    # Summary
+    n_rows = len(df_display)
+    st.caption(f"Showing {n_rows:,} entries · Sorted by {STAT_DESC.get(sort_stat, sort_stat)} ({sort_order})")
+
+    st.markdown("---")
+
+    # Build display columns based on scope
+    if is_career:
+        display_cols = ["PLAYER_NAME", "TEAMS", "SEASONS", "TOTAL_MIN"]
+    else:
+        display_cols = ["PLAYER_NAME", "TEAM", "SEASON", "MIN", "GP"]
+
+    # Add stats
+    stats_to_show = ["STEPH_PCT", "rSTEPH", "STEPH_ABS", "OWN_TS", "TOE", "PPG", "APG"]
+    for col in stats_to_show:
+        if col in df_display.columns:
+            display_cols.append(col)
+
+    # Format for display
+    df_show = df_display[display_cols].copy()
+    
+    # Round numeric columns
+    numeric_cols = ["STEPH_PCT", "rSTEPH", "STEPH_ABS", "OWN_TS", "TOE", "PPG", "APG"]
+    for col in numeric_cols:
+        if col in df_show.columns:
+            df_show[col] = df_show[col].round(3)
+
+    st.dataframe(df_show, use_container_width=True, hide_index=True)
 
 
 # =============================================================================

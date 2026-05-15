@@ -11,7 +11,7 @@
 
 1. [Motivation](#1-motivation)
 2. [Core Metric — STEPH_PCT](#2-core-metric--steph_pct)
-3. [Teammate Quality Factor & STEPH_ADJ](#3-teammate-quality-factor--steph_adj)
+3. [rSTEPH — STEPH Relative to League Average](#3-rsteph--steph-relative-to-league-average)
 4. [Total Offensive Efficiency (TOE)](#4-total-offensive-efficiency-toe)
 5. [Statistical Significance & Bootstrap CI](#5-statistical-significance--bootstrap-ci)
 6. [Data Pipeline](#6-data-pipeline)
@@ -103,30 +103,38 @@ most significant source of self-inflation.
 
 ---
 
-## 3. Teammate Quality Factor & STEPH_ADJ
+## 3. rSTEPH — STEPH Relative to League Average
 
 ### Motivation
 
-It's harder to improve teammates who already shoot poorly — there are fewer
-tactical adjustments that make a 47% TS% player suddenly become a 52% TS%
-player. Improving efficient teammates is a sign of genuine gravity, but
-*creating efficiency where there was none* is rarer and arguably more
-impressive.
+To better contextualize a player's STEPH score, we express it relative to the
+league average True Shooting percentage. This shows how significant a player's
+teammate improvement is compared to the typical baseline of the league.
 
 ### Formula
 
 ```
-TQF(P) = league_avg_TS% / ( TS%_teammates_OFF × 100 )
+rSTEPH(P) = ( TS%_teammates_ON − TS%_teammates_OFF ) / LEAGUE_AVG_TS × 100
 ```
 
-- If P's teammates shoot **below** league average when P is off the floor →
-  `TQF > 1` → STEPH_ADJ **amplified** (harder lift, more meaningful)
-- If P's teammates shoot **above** league average when P is off the floor →
-  `TQF < 1` → STEPH_ADJ **discounted** (teammates were already good regardless)
+Or equivalently:
 
 ```
-STEPH_ADJ(P) = STEPH_PCT(P) × TQF(P)
+rSTEPH(P) = STEPH_ABS(P) / LEAGUE_AVG_TS × 100
 ```
+
+**Example:** If a player makes his teammates gain 7 TS% points in a league with
+an average TS% of 56%, that's an rSTEPH of 7/56 × 100 = **12.5%**.
+
+This metric answers: "How large is this player's gravity effect as a percentage
+of what an average NBA possession yields?"
+
+### Interpretation
+
+- **rSTEPH > 10%**: Elite gravity — teammate improvement exceeds 10% of league
+  average scoring efficiency
+- **rSTEPH 5-10%**: Strong gravity impact
+- **rSTEPH < 5%**: Modest or negligible teammate elevation
 
 ---
 
@@ -172,14 +180,14 @@ neutral:
 own_comp = own_premium      if own_premium ≥ 0
          = own_premium × 1.5  if own_premium < 0
 
-adj_comp = STEPH_ADJ        if STEPH_ADJ ≥ 0
-         = STEPH_ADJ × 1.5    if STEPH_ADJ < 0
+rsteph_comp = rSTEPH        if rSTEPH ≥ 0
+            = rSTEPH × 1.5    if rSTEPH < 0
 ```
 
 ### Step 4 — Combine
 
 ```
-TOE = own_comp × player_weight + adj_comp × teammate_weight
+TOE = own_comp × player_weight + rsteph_comp × teammate_weight
 ```
 
 ### Interpretation
@@ -251,7 +259,7 @@ For each qualifying player P:
   5. Restrict OFF sample to lineups containing at least one core teammate
   6. Subtract P's estimated shots from ON lineup totals
   7. Compute minute-weighted TS% for both splits
-  8. Compute STEPH_PCT, TQF, STEPH_ADJ, TOE, bootstrap CI
+  8. Compute STEPH_PCT, rSTEPH, TOE, bootstrap CI
 ```
 
 ### Unicode normalization
@@ -368,7 +376,7 @@ narrative.
 | Column | Description |
 |---|---|
 | `STEPH_PCT` | Primary metric — relative % improvement in teammate TS% |
-| `STEPH_ADJ` | Quality-adjusted STEPH (× teammate quality factor) |
+| `rSTEPH` | STEPH relative to league average TS% — primary metric for cross-era comparison |
 | `STEPH_ABS` | Absolute teammate TS% pts gained (legacy, kept for reference) |
 | `TQF` | Teammate Quality Factor (`league_avg_ts / tm_ts_off`) |
 | `TM_TS_ON` | Teammate TS% when P is on the floor (P's shots excluded) |
@@ -396,9 +404,9 @@ narrative.
 | `career_steph_scatter.png` | Career avg STEPH_PCT vs seasons calculated |
 | `career_steph_reliability.png` | Established vs Emerging bar chart |
 | `career_toe_bar.png` | Career TOE leaderboard |
-| `career_toe_scatter.png` | Career TOE vs STEPH_ADJ scatter |
+| `career_toe_scatter.png` | Career TOE vs rSTEPH scatter |
 | `top10_single_season.png` | Top 10 single-season STEPH_PCT scores |
-| `career_steph_adj_bar.png` | Career quality-adjusted STEPH leaderboard |
+| `career_rsteph_bar.png` | Career rSTEPH leaderboard |
 
 ---
 
@@ -416,12 +424,14 @@ Place `steph_all_seasons.csv` in the same directory as `steph_explorer.py`.
 
 ### Modes
 
-On launch the app shows three mode options and nothing else — no default is
+On launch the app shows five mode options and nothing else — no default is
 selected. Pick a mode from the sidebar radio:
 
 | Mode | Purpose |
 |---|---|
-| **Graph** | Scatter or bar chart. Highlight specific players. Choose season scope. |
+| **Graph** | Scatter or bar chart across all players. Highlight specific players. Choose season scope. |
+| **Custom Graph** | Create charts with ONLY selected players (no background dots). Download as PNG with watermark. |
+| **List** | Continuous sortable list of all players and stats. Filter by search, sort by any stat. |
 | **Player Stats** | Full stat table for one or more players. No chart. |
 | **Compare** | Two players side by side. No chart. |
 
@@ -460,6 +470,44 @@ by minutes played.
 **Bar** — single stat, top N players, optional league average vertical line.
 Bars are gold if above league average, red if below. Highlighted players are
 drawn in blue regardless of value.
+
+---
+
+### Custom Graph mode
+
+This mode creates charts showing **only the players you select** — no background
+dots, no comparison to the full player pool. Ideal for creating focused
+visualizations of specific players.
+
+#### Features
+
+- **Select Players to Display**: Only chosen players appear in the chart
+- **Download as PNG**: Click "Download Chart as PNG" to get a high-resolution
+  image with a watermark reading `stephscore.streamlit.app`
+- **Scatter or Bar**: Same chart type options as Graph mode
+- **Season Scope**: Career Average, All Seasons, or specific season
+
+The download includes a semi-transparent gold watermark at the bottom of the
+chart.
+
+---
+
+### List mode
+
+A continuous, scrollable table showing **all players** in the selected timeframe
+with all key stats.
+
+#### Features
+
+- **Sort By**: Choose any stat (STEPH_PCT, rSTEPH, STEPH_ABS, OWN_TS, TOE, PPG,
+  APG, MIN, GP) to sort the entire list
+- **Order**: Descending (highest first) or Ascending (lowest first)
+- **Search Player**: Filter the list by typing a player's name
+- **Season Scope**: Career Average, All Seasons, or specific season
+
+The list shows player name, team/season info, and all major stats rounded to
+3 decimal places. Perfect for browsing the full dataset or finding players by
+specific statistical criteria.
 
 ---
 
@@ -514,7 +562,7 @@ Place `steph_all_seasons.csv` in the same directory.
 | STEPH Absolute | `STEPH_ABS` | Teammate TS% pts gained (absolute) |
 
 | STEPH % | `STEPH_PCT` | Relative teammate TS% improvement — primary metric |
-| STEPH Adjusted % | `STEPH_ADJ` | Quality-adjusted gravity (× TQF) |
+| rSTEPH | `rSTEPH` | STEPH relative to league average TS% |
 | Own True Shooting % | `OWN_TS` | Player's own TS% |
 | Points Per Game | `PPG` | Season PTS / GP |
 | Assists Per Game | `APG` | Season AST / GP |
@@ -545,7 +593,7 @@ Compare modes show all columns from the CSV (see §10 for full column reference)
 → Mode: Player Stats · Player: Draymond Green · Season: 2020-21
 
 | STEPH % | `STEPH_PCT` | Relative teammate TS% improvement (primary) |
-| STEPH Adjusted % | `STEPH_ADJ` | Quality-adjusted gravity |
+| rSTEPH | `rSTEPH` | STEPH relative to league average TS% |
 | Own True Shooting % | `OWN_TS` | Player's own TS% |
 | Points Per Game | `PPG` | Derived from season PTS / GP |
 | Assists Per Game | `APG` | Derived from season AST / GP |
@@ -584,8 +632,9 @@ team's lineups, so the comparison is internally consistent but doesn't capture
 cross-team effects.
 
 **Coaching and system effects.** A player on a pass-heavy team will mechanically
-show higher teammate TS% because the system creates better shots. STEPH_ADJ
-partially addresses this via TQF but doesn't fully remove system effects.
+show higher teammate TS% because the system creates better shots. rSTEPH
+provides context relative to league average but doesn't fully remove system
+effects.
 
 **No opponent adjustment.** Playing exclusively against weak defenses inflates
 both ON and OFF TS%, but should largely cancel out in the delta.
