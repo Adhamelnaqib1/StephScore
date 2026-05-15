@@ -1,1 +1,1 @@
-Nothing should be ignored since the changes only include Python source files (.py) without any build artifacts, dependencies, or temporary files.
+Nothing should be ignored in this case, as the changes only include source/config files (.md and .py) without any build artifacts, dependencies, or temporary files.
