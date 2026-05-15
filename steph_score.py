@@ -3,13 +3,13 @@
 # Primary metric:  STEPH_PCT  — percentage-based relative improvement in
 #                               teammate True Shooting %
 #   STEPH_PCT   = (ts_on − ts_off) / ts_off × 100
-#   STEPH_ADJ   = STEPH_PCT × (ts_off / league_avg_ts)   [quality-adjusted]
+#   rSTEPH      = STEPH_ABS / league_avg_ts × 100  [relative to league avg]
 #
 # TOE (Total Offensive Efficiency):
 #   Integrates own shooting premium and teammate impact, weighted by
 #   each player's actual shot-volume share on the floor.
 #   TOE = own_premium × player_shot_weight
-#       + STEPH_ADJ  × teammate_shot_weight
+#       + rSTEPH  × teammate_shot_weight
 #
 # Pipeline: 2 API calls per season → in-memory computation → 12+ charts + CSVs
 # =============================================================================
@@ -49,7 +49,8 @@ nba_http.STATS_HEADERS = {
 # CONFIG
 # =============================================================================
 SEASONS = [f"{y}-{str(y+1)[-2:]}" for y in range(2007, 2026)]
-MIN_MIN_PCT       = 0.80    # top 20% of minutes → qualifying per season
+MIN_MIN_PCT       = 0.60    # top 40% of minutes → qualifying per season
+MIN_USG_PCT       = 0.80    # top 20% usage rate → additional constraint
 MIN_SHARED_MIN    = 150     # shared lineup-minutes to be a "core teammate" (per-season pass)
 MIN_SHARED_CAREER = 50      # looser threshold for the career uncapped pass
 MIN_CAREER_MIN    = 700     # exclude seasons < 700 min from career average
@@ -261,7 +262,7 @@ def no_overlap_offsets(xs, ys, base_offset=(8, 12), min_dist=0.035, max_iteratio
 
 def compute_season(season, lineups_df, player_df, league_avg_ts, threshold=None):
     """
-    Compute STEPH_PCT, STEPH_ADJ, TOE, CI, significance for all qualifying players.
+    Compute STEPH_PCT, rSTEPH, TOE, CI, significance for all qualifying players.
     threshold: override MIN_SHARED_MIN (used for career uncapped pass).
     """
     t = threshold if threshold is not None else MIN_SHARED_MIN
@@ -271,8 +272,14 @@ def compute_season(season, lineups_df, player_df, league_avg_ts, threshold=None)
     pdf["FTA_PER_MIN"] = pdf["FTA"] / pdf["MIN"].replace(0, np.nan)
     pdf["PTS_PER_MIN"] = pdf["PTS"] / pdf["MIN"].replace(0, np.nan)
 
+    # Calculate usage rate for filtering (USG% approx = FGA / team_FGA * 100, using league avg as proxy)
+    # We use FGA_PER_MIN relative to the league average as a proxy for USG%
+    usg_rate = pdf["FGA"] / (pdf["FGA"].sum() / len(pdf))  # simplified USG proxy
+    
     min_thr   = pdf["MIN"].quantile(MIN_MIN_PCT) if threshold is None else 0
-    qualified = pdf[pdf["MIN"] >= min_thr].copy()
+    usg_thr   = pdf["FGA_PER_MIN"].quantile(MIN_USG_PCT) if threshold is None else 0
+    
+    qualified = pdf[(pdf["MIN"] >= min_thr) & (pdf["FGA_PER_MIN"] >= usg_thr)].copy()
     qualified["LINEUP_NAME"] = qualified["PLAYER_NAME"].apply(to_lineup_name)
 
     rows = []
@@ -312,20 +319,21 @@ def compute_season(season, lineups_df, player_df, league_avg_ts, threshold=None)
         # ── Primary STEPH metrics ──────────────────────────────────────────
         steph_abs = (ts_on - ts_off) * 100          # absolute pts difference
         steph_pct = (ts_on - ts_off) / ts_off * 100  # percentage improvement (primary)
-
-        # Quality factor: making inefficient teammates efficient is harder
-        tqf       = league_avg_ts/(ts_off*100) if league_avg_ts > 0 else 1.0
-        steph_adj = steph_pct * tqf                  # quality-adjusted %
+        
+        # rSTEPH: STEPH relative to league average TS%
+        # Example: if player makes teammates gain 7 TS% points in a league with 56% avg TS,
+        # that's 7/56 = 12.5% rSTEPH
+        rsteph = (steph_abs / league_avg_ts) * 100 if league_avg_ts > 0 else steph_pct
 
         # ── Statistical significance via bootstrap ─────────────────────────
         bs_mean, ci_lo, ci_hi, p_val = bootstrap_steph(on_rows, off_rows, rates)
         stars = sig_stars(p_val) if not np.isnan(p_val) else ""
 
         # ── TOE: Total Offensive Efficiency ───────────────────────────────
-        # Own premium over league average (pts scale, matching steph_adj scale)
+        # Own premium over league average (pts scale, matching rsteph scale)
         own_premium = (player["OWN_TS"] * 100) - league_avg_ts
         own_comp    = own_premium if own_premium >= 0 else own_premium * 1.5
-        adj_comp    = steph_adj  if steph_adj   >= 0 else steph_adj   * 1.5
+        adj_comp    = rsteph     if rsteph      >= 0 else rsteph      * 1.5
 
         # Volume weights: what share of on-floor scoring is P vs teammates?
         p_pts       = player["PTS"]
@@ -342,7 +350,7 @@ def compute_season(season, lineups_df, player_df, league_avg_ts, threshold=None)
             "SEASON"             : season,
             "STEPH_ABS"          : round(steph_abs, 3),   # absolute pts (legacy)
             "STEPH_PCT"          : round(steph_pct, 3),   # % improvement (primary)
-            "STEPH_ADJ"          : round(steph_adj, 3),   # quality-adjusted %
+            "rSTEPH"             : round(rsteph, 3),      # relative to league avg TS%
             "TQF"                : round(tqf, 3),
             "TM_TS_ON"           : round(ts_on  * 100, 2),
             "TM_TS_OFF"          : round(ts_off * 100, 2),
@@ -413,12 +421,13 @@ def compute_for_player(pid, season, lineups_df, player_df, league_avg_ts):
         return None
 
     steph_pct = (ts_on - ts_off) / ts_off * 100
-    tqf = league_avg_ts / (ts_off * 100) if league_avg_ts > 0 else 1.0
-    steph_adj = steph_pct * tqf
+    steph_abs = (ts_on - ts_off) * 100
+    # rSTEPH: STEPH relative to league average TS%
+    rsteph = (steph_abs / league_avg_ts) * 100 if league_avg_ts > 0 else steph_pct
 
     own_premium = (player["OWN_TS"] * 100) - league_avg_ts
     own_comp    = own_premium if own_premium >= 0 else own_premium * 1.5
-    adj_comp    = steph_adj  if steph_adj   >= 0 else steph_adj   * 1.5
+    adj_comp    = rsteph     if rsteph      >= 0 else rsteph      * 1.5
     p_pts       = player["PTS"]
     tm_pts_est  = ts_on * player["MIN"]
     total_vol   = p_pts + tm_pts_est
@@ -430,9 +439,9 @@ def compute_for_player(pid, season, lineups_df, player_df, league_avg_ts):
         "PLAYER_ID"    : pid,
         "PLAYER_NAME"  : player["PLAYER_NAME"],
         "SEASON"       : season,
-        "STEPH_ABS"    : round((ts_on - ts_off) * 100, 3),
+        "STEPH_ABS"    : round(steph_abs, 3),
         "STEPH_PCT"    : round(steph_pct, 3),
-        "STEPH_ADJ"    : round(steph_adj, 3),
+        "rSTEPH"       : round(rsteph, 3),
         "TQF"          : round(tqf, 3),
         "TM_TS_ON"     : round(ts_on  * 100, 2),
         "TM_TS_OFF"    : round(ts_off * 100, 2),
@@ -530,7 +539,7 @@ for season in SEASONS:
         continue
 
     all_results[season] = df
-    top5 = df[["PLAYER_NAME","STEPH_PCT","STEPH_ADJ","TOE","OWN_TS","SIG"]].head(5)
+    top5 = df[["PLAYER_NAME","STEPH_PCT","rSTEPH","TOE","OWN_TS","SIG"]].head(5)
     print(f"  Scored {len(df)} players. Top 5:")
     print(top5.to_string(index=False))
 
@@ -563,7 +572,7 @@ for season, (lin, pla, avg_ts) in raw_data.items():
             if row is None:
                 row = {
                     "PLAYER_ID": pid, "PLAYER_NAME": pid_to_name.get(pid, f"ID_{pid}"),
-                    "SEASON": season, "STEPH_PCT": np.nan, "STEPH_ADJ": np.nan,
+                    "SEASON": season, "STEPH_PCT": np.nan, "rSTEPH": np.nan,
                     "STEPH_ABS": np.nan, "TOE": np.nan, "OWN_TS": np.nan,
                     "MIN": np.nan, "QUALIFIED": False,
                 }
@@ -582,13 +591,13 @@ eligible = master[
 
 # League-wide reference values across all eligible rows
 LG_STEPH_PCT  = eligible["STEPH_PCT"].mean()
-LG_STEPH_ADJ  = eligible["STEPH_ADJ"].mean()
+LG_rSTEPH     = eligible["rSTEPH"].mean()
 LG_TOE        = eligible["TOE"].mean()
 LG_OWN_TS     = eligible["OWN_TS"].mean()
 AVG_SEASON_MIN = eligible["MIN"].mean()
 
 print(f"\nLeague averages over eligible seasons:")
-print(f"  STEPH_PCT: {LG_STEPH_PCT:.3f}%  |  STEPH_ADJ: {LG_STEPH_ADJ:.3f}  |  TOE: {LG_TOE:.3f}")
+print(f"  STEPH_PCT: {LG_STEPH_PCT:.3f}%  |  rSTEPH: {LG_rSTEPH:.3f}  |  TOE: {LG_TOE:.3f}")
 
 
 def reg_wavg(g, col, prior_val, prior_weight):
@@ -608,7 +617,7 @@ career = (
     eligible.groupby(["PLAYER_ID", "PLAYER_NAME"])
     .apply(lambda g: pd.Series({
         "AVG_STEPH_PCT" : reg_wavg(g, "STEPH_PCT", LG_STEPH_PCT, pw),
-        "AVG_STEPH_ADJ" : reg_wavg(g, "STEPH_ADJ", LG_STEPH_ADJ, pw),
+        "AVG_rSTEPH"    : reg_wavg(g, "rSTEPH", LG_rSTEPH, pw),
         "AVG_TOE"       : reg_wavg(g, "TOE",       LG_TOE,       pw),
         "AVG_OWN_TS"    : reg_wavg(g, "OWN_TS",    LG_OWN_TS,    pw),
         "TOTAL_MIN"     : g["MIN"].sum(),
@@ -629,7 +638,7 @@ career["TIER"] = career["SEASONS"].apply(
 )
 
 print(f"\n── Career STEPH_PCT Leaderboard ──")
-print(career[["PLAYER_NAME","AVG_STEPH_PCT","AVG_STEPH_ADJ","AVG_TOE","SEASONS","TIER"]].head(20).to_string())
+print(career[["PLAYER_NAME","AVG_STEPH_PCT","AVG_rSTEPH","AVG_TOE","SEASONS","TIER"]].head(20).to_string())
 
 # =============================================================================
 # VISUALISATION HELPERS
@@ -883,7 +892,7 @@ print("✓  career_toe_bar.png")
 
 
 # =============================================================================
-# PLOT 5 — Career TOE scatter:  STEPH_ADJ (x)  vs  TOE (y)
+# PLOT 5 — Career TOE scatter:  rSTEPH (x)  vs  TOE (y)
 # =============================================================================
 
 fig, ax = fig_ax(13, 8)
@@ -891,13 +900,13 @@ fig, ax = fig_ax(13, 8)
 dot_c = np.where(career["AVG_TOE"] >= LG_TOE, TEAL, RED)
 sizes = (career["TOTAL_MIN"] / career["TOTAL_MIN"].max() * 250 + 40).values
 
-ax.scatter(career["AVG_STEPH_ADJ"], career["AVG_TOE"],
+ax.scatter(career["AVG_rSTEPH"], career["AVG_TOE"],
            c=dot_c, s=sizes, alpha=0.82, edgecolors=BG, linewidths=0.6, zorder=3)
 
 ax.axhline(LG_TOE,       color=MUTED, lw=1.0, ls="--", alpha=0.7,
            label=f"Lg avg TOE ({LG_TOE:.2f})")
-ax.axvline(LG_STEPH_ADJ, color=MUTED, lw=1.0, ls=":",  alpha=0.7,
-           label=f"Lg avg STEPH_ADJ ({LG_STEPH_ADJ:.2f})")
+ax.axvline(LG_rSTEPH, color=MUTED, lw=1.0, ls=":",  alpha=0.7,
+           label=f"Lg avg rSTEPH ({LG_rSTEPH:.2f})")
 
 yr = career["AVG_TOE"].max() - career["AVG_TOE"].min()
 ax.set_ylim(career["AVG_TOE"].min() - yr*0.12, career["AVG_TOE"].max() + yr*0.38)
@@ -905,13 +914,13 @@ ax.set_ylim(career["AVG_TOE"].min() - yr*0.12, career["AVG_TOE"].max() + yr*0.38
 top10_t = career.nlargest(10, "AVG_TOE")
 labels  = [f"{r['PLAYER_NAME']}  TOE {r['AVG_TOE']:+.2f}"
            for _, r in top10_t.iterrows()]
-annotate_scatter(ax, top10_t["AVG_STEPH_ADJ"].values, top10_t["AVG_TOE"].values,
+annotate_scatter(ax, top10_t["AVG_rSTEPH"].values, top10_t["AVG_TOE"].values,
                  labels, colors=TEAL, fontsize=8.5, top_n=10)
 
-ax.set_xlabel("Career Avg Quality-Adjusted STEPH  (teammate gravity, baseline-adjusted)")
+ax.set_xlabel("Career Avg rSTEPH  (teammate gravity relative to league avg TS%)")
 ax.set_ylabel("Career Avg TOE  (combined own efficiency + teammate gravity)")
 ax.set_title(
-    f"Career TOE vs Quality-Adjusted Gravity  ·  {SEASONS[0]}–{SEASONS[-1]}\n"
+    f"Career TOE vs rSTEPH Gravity  ·  {SEASONS[0]}–{SEASONS[-1]}\n"
     "Teal = above avg TOE  ·  Size = total minutes  ·  "
     "Top-right = elite all-around offensive contributors",
     pad=12
@@ -988,34 +997,33 @@ print("✓  top10_single_season.png")
 
 
 # =============================================================================
-# PLOT 7 — Quality-Adjusted STEPH_ADJ career bar chart
+# PLOT 7 — Career rSTEPH bar chart
 # =============================================================================
 
-adj_top = career.nlargest(20, "AVG_STEPH_ADJ").sort_values("AVG_STEPH_ADJ")
+adj_top = career.nlargest(20, "AVG_rSTEPH").sort_values("AVG_rSTEPH")
 
 fig, ax = fig_ax(13, 10)
 bar_chart(
     ax,
     names      = adj_top["PLAYER_NAME"].values,
-    values     = adj_top["AVG_STEPH_ADJ"].values,
-    bar_colors = [TEAL if v >= LG_STEPH_ADJ else RED for v in adj_top["AVG_STEPH_ADJ"]],
-    bar_labels = [f"{v:+.2f}  (TQF×{t:.2f}, {int(s)}s)" for v, t, s in
-                  zip(adj_top["AVG_STEPH_ADJ"],
-                      eligible.groupby("PLAYER_ID")["TQF"].mean().reindex(adj_top["PLAYER_ID"]).fillna(1).values,
+    values     = adj_top["AVG_rSTEPH"].values,
+    bar_colors = [TEAL if v >= LG_rSTEPH else RED for v in adj_top["AVG_rSTEPH"]],
+    bar_labels = [f"{v:+.2f}  ({int(s)}s)" for v, s in
+                  zip(adj_top["AVG_rSTEPH"],
                       adj_top["SEASONS"])],
-    lg_val     = LG_STEPH_ADJ,
-    lg_label   = f"Lg avg ({LG_STEPH_ADJ:.2f})",
-    xlabel     = "Quality-Adjusted STEPH  (teammate % improvement × teammate-quality factor)",
+    lg_val     = LG_rSTEPH,
+    lg_label   = f"Lg avg ({LG_rSTEPH:.2f})",
+    xlabel     = "rSTEPH  (teammate TS% pts gained relative to league avg TS%)",
 )
 ax.set_title(
-    f"Career Quality-Adjusted Gravity  ·  Top 20  ·  {SEASONS[0]}–{SEASONS[-1]}\n"
-    "Adjusts for difficulty: improving already-efficient teammates scores lower",
+    f"Career rSTEPH Leaderboard  ·  Top 20  ·  {SEASONS[0]}–{SEASONS[-1]}\n"
+    "Measures teammate impact relative to league average shooting environment",
     pad=12
 )
 plt.tight_layout()
-plt.savefig("career_steph_adj_bar.png", dpi=160, bbox_inches="tight", facecolor=BG)
+plt.savefig("career_rsteph_bar.png", dpi=160, bbox_inches="tight", facecolor=BG)
 plt.close()
-print("✓  career_steph_adj_bar.png")
+print("✓  career_rsteph_bar.png")
 
 
 # =============================================================================
@@ -1024,7 +1032,7 @@ print("✓  career_steph_adj_bar.png")
 
 master_csv_cols = [
     "PLAYER_NAME","PLAYER_ID","SEASON","TEAM",
-    "STEPH_PCT","STEPH_ADJ","STEPH_ABS","TQF",
+    "STEPH_PCT","rSTEPH","STEPH_ABS","TQF",
     "TM_TS_ON","TM_TS_OFF","OWN_TS","LEAGUE_AVG_TS",
     "TOE","P_SHOT_WEIGHT","TM_SHOT_WEIGHT",
     "CI_LO","CI_HI","P_VALUE","SIG",
@@ -1036,7 +1044,7 @@ master[[c for c in master_csv_cols if c in master.columns]].sort_values(
 
 career_csv_cols = [
     "PLAYER_NAME","PLAYER_ID","SEASONS","TIER","RELIABILITY",
-    "AVG_STEPH_PCT","AVG_STEPH_ADJ","AVG_TOE","AVG_OWN_TS","TOTAL_MIN",
+    "AVG_STEPH_PCT","AVG_rSTEPH","AVG_TOE","AVG_OWN_TS","TOTAL_MIN",
 ]
 career[[c for c in career_csv_cols if c in career.columns]].to_csv(
     "steph_career_averages.csv", index_label="RANK")
@@ -1046,8 +1054,8 @@ print("   Plots : scatter_<season>.png          (per-season scatter)")
 print("           career_steph_scatter.png       (career gravity scatter)")
 print("           career_steph_reliability.png   (established vs emerging bar)")
 print("           career_toe_bar.png             (TOE leaderboard bar)")
-print("           career_toe_scatter.png         (TOE vs STEPH_ADJ career scatter)")
+print("           career_toe_scatter.png         (TOE vs rSTEPH career scatter)")
 print("           top10_single_season.png        (top 10 individual season scores)")
-print("           career_steph_adj_bar.png       (quality-adjusted gravity bar)")
+print("           career_rsteph_bar.png          (career rSTEPH leaderboard bar)")
 print("   CSVs  : steph_all_seasons.csv")
 print("           steph_career_averages.csv")

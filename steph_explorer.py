@@ -57,7 +57,7 @@ st.markdown("""
 STATS = {
     "STEPH_ABS"  : "STEPH Absolute  (teammate TS% pts gained)",
     "STEPH_PCT"  : "STEPH %  (relative teammate TS% improvement)",
-    "STEPH_ADJ"  : "STEPH Adjusted %  (quality-adjusted gravity)",
+    "rSTEPH"     : "rSTEPH  (STEPH relative to league avg TS%)",
     "OWN_TS"     : "Own True Shooting %",
     "PPG"        : "Points Per Game",
     "APG"        : "Assists Per Game",
@@ -67,7 +67,7 @@ STATS = {
 STAT_SHORT = {
     "STEPH_ABS" : "STEPH Abs",
     "STEPH_PCT" : "STEPH %",
-    "STEPH_ADJ" : "STEPH Adj %",
+    "rSTEPH"    : "rSTEPH",
     "OWN_TS"    : "TS%",
     "PPG"       : "PPG",
     "APG"       : "APG",
@@ -76,7 +76,7 @@ STAT_SHORT = {
 
 # All stats shown in Player Stats / Compare modes
 ALL_STAT_COLS = [
-    "SEASON","TEAM","STEPH_PCT","STEPH_ADJ","STEPH_ABS",
+    "SEASON","TEAM","STEPH_PCT","rSTEPH","STEPH_ABS",
     "OWN_TS","TOE","PPG","APG","TQF",
     "TM_TS_ON","TM_TS_OFF","LEAGUE_AVG_TS",
     "P_SHOT_WEIGHT","TM_SHOT_WEIGHT",
@@ -86,7 +86,7 @@ ALL_STAT_COLS = [
 
 STAT_DESC = {
     "STEPH_PCT"       : "Relative teammate TS% improvement (%)",
-    "STEPH_ADJ"       : "Quality-adjusted teammate improvement",
+    "rSTEPH"          : "STEPH relative to league average TS%",
     "STEPH_ABS"       : "Absolute teammate TS% pts gained",
     "OWN_TS"          : "Player's own True Shooting %",
     "TOE"             : "Total Offensive Efficiency (own + gravity)",
